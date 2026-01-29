@@ -1,11 +1,11 @@
 {
   "name": "deep-sanitizer",
-  "displayName": "deep-sanitizer",
-  "description": "Secure code sanitization tool",
-  "version": "0.0.1",
+  "displayName": "Deep Sanitizer",
+  "description": "Secure code sanitization tool with custom prompts and diff view",
+  "version": "0.2.0",
   "publisher": "taeg",
   "engines": {
-    "vscode": "^1.108.1"
+    "vscode": "^1.80.0"
   },
   "categories": [
     "Other"
@@ -15,18 +15,36 @@
   "contributes": {
     "commands": [
       {
-        "command": "deep-sanitizer.sanitize",
-        "title": "Deep Sanitizer: Sanitize Code"
+        "command": "deep-sanitizer.sanitize.refactor",
+        "title": "Refactoring"
+      },
+      {
+        "command": "deep-sanitizer.sanitize.unittest",
+        "title": "Unit Test Generation"
+      },
+      {
+        "command": "deep-sanitizer.sanitize.inspect",
+        "title": "Code Inspection (Review)"
+      },
+      {
+        "command": "deep-sanitizer.sanitize.flowchart",
+        "title": "Generate Flowchart (Mermaid)"
       },
       {
         "command": "deep-sanitizer.restore",
-        "title": "Deep Sanitizer: Restore Code"
+        "title": "Restore Code"
+      }
+    ],
+    "submenus": [
+      {
+        "id": "deep-sanitizer.menu",
+        "label": "Deep Sanitizer: Sanitize Code"
       }
     ],
     "menus": {
       "editor/context": [
         {
-          "command": "deep-sanitizer.sanitize",
+          "submenu": "deep-sanitizer.menu",
           "group": "modification",
           "when": "editorHasSelection"
         },
@@ -34,6 +52,24 @@
           "command": "deep-sanitizer.restore",
           "group": "modification",
           "when": "editorTextFocus"
+        }
+      ],
+      "deep-sanitizer.menu": [
+        {
+          "command": "deep-sanitizer.sanitize.refactor",
+          "group": "1_main"
+        },
+        {
+          "command": "deep-sanitizer.sanitize.unittest",
+          "group": "1_main"
+        },
+        {
+          "command": "deep-sanitizer.sanitize.inspect",
+          "group": "2_analysis"
+        },
+        {
+          "command": "deep-sanitizer.sanitize.flowchart",
+          "group": "2_analysis"
         }
       ]
     },
@@ -55,10 +91,70 @@
           "default": true,
           "description": "클래스/인터페이스/타입명을 난독화할지 여부"
         },
+        "deepSanitizer.maskStrings": {
+          "type": "boolean",
+          "default": true,
+          "description": "문자열 리터럴을 마스킹(<STRING>)할지 여부"
+        },
+        "deepSanitizer.removeComments": {
+          "type": "boolean",
+          "default": true,
+          "description": "주석을 제거할지 여부"
+        },
+        "deepSanitizer.whitelist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "마스킹하지 않을 단어 목록"
+        },
+        "deepSanitizer.whitelistMode": {
+          "type": "string",
+          "enum": [
+            "append",
+            "overwrite"
+          ],
+          "default": "append",
+          "description": "화이트리스트 적용 방식"
+        },
         "deepSanitizer.copyToClipboard": {
           "type": "boolean",
           "default": true,
           "description": "난독화 완료 후 자동으로 클립보드에 복사"
+        },
+        "deepSanitizer.restoreMode": {
+          "type": "string",
+          "enum": [
+            "direct",
+            "diff"
+          ],
+          "default": "diff",
+          "description": "복원 모드: 'direct'는 파일에 즉시 적용, 'diff'는 비교 뷰(Diff View)를 엽니다."
+        },
+        "deepSanitizer.prompts.refactor": {
+          "type": "string",
+          "editPresentation": "multilineText",
+          "default": "",
+          "description": "리팩토링 프롬프트 템플릿. {code}, {langId} 변수를 사용할 수 있습니다. 비워두면 기본값을 사용합니다."
+        },
+        "deepSanitizer.prompts.unittest": {
+          "type": "string",
+          "editPresentation": "multilineText",
+          "default": "",
+          "description": "유닛 테스트 프롬프트 템플릿. {code}, {langId} 변수를 사용할 수 있습니다."
+        },
+        "deepSanitizer.prompts.inspect": {
+          "type": "string",
+          "editPresentation": "multilineText",
+          "default": "",
+          "description": "코드 검수(Review) 프롬프트 템플릿. {code}, {langId} 변수를 사용할 수 있습니다."
+        },
+        "deepSanitizer.prompts.flowchart": {
+          "type": "string",
+          "editPresentation": "multilineText",
+          "default": "",
+          "description": "플로우차트 생성 프롬프트 템플릿. {code}, {langId} 변수를 사용할 수 있습니다."
         }
       }
     }
@@ -74,12 +170,11 @@
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
-    "@types/vscode": "^1.108.1",
+    "@types/vscode": "^1.80.0",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
-    "eslint": "^9.39.2",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.52.0"
+    "eslint": "^9.0.0",
+    "typescript": "^5.0.0"
   },
   "dependencies": {
     "web-tree-sitter": "^0.26.3"
