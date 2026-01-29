@@ -1,0 +1,78 @@
+{
+  "name": "deep-sanitizer",
+  "displayName": "deep-sanitizer",
+  "description": "Secure code sanitization tool",
+  "version": "0.0.1",
+  "publisher": "taeg",
+  "engines": {
+    "vscode": "^1.108.1"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "deep-sanitizer.sanitize",
+        "title": "Deep Sanitizer: Sanitize Code"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "deep-sanitizer.sanitize",
+          "group": "modification",
+          "when": "editorHasSelection"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Deep Sanitizer",
+      "properties": {
+        "deepSanitizer.maskVariables": {
+          "type": "boolean",
+          "default": true,
+          "description": "변수명을 난독화할지 여부"
+        },
+        "deepSanitizer.maskFunctions": {
+          "type": "boolean",
+          "default": true,
+          "description": "함수명을 난독화할지 여부"
+        },
+        "deepSanitizer.maskClasses": {
+          "type": "boolean",
+          "default": true,
+          "description": "클래스/인터페이스/타입명을 난독화할지 여부"
+        },
+        "deepSanitizer.copyToClipboard": {
+          "type": "boolean",
+          "default": true,
+          "description": "난독화 완료 후 자동으로 클립보드에 복사"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@types/vscode": "^1.108.1",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "eslint": "^9.39.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.52.0"
+  },
+  "dependencies": {
+    "web-tree-sitter": "^0.26.3"
+  }
+}
