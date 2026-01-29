@@ -1,33 +1,75 @@
+// src/sanitizer.ts
 import * as vscode from "vscode";
 import * as path from "path";
 
 const { Parser, Language, Query } = require("web-tree-sitter");
 
-// [핵심 전략] "정의(Definition)"를 찾아내는 정밀한 쿼리
+// [전략] 마스킹하지 말아야 할 일반적인 예약어 및 라이브러리 (Context 유지)
+const RESERVED_NAMES = new Set([
+  "console",
+  "window",
+  "document",
+  "process",
+  "global",
+  "Math",
+  "JSON",
+  "Object",
+  "Array",
+  "String",
+  "Number",
+  "Boolean",
+  "Date",
+  "Promise",
+  "Error",
+  "React",
+  "useState",
+  "useEffect",
+  "useCallback",
+  "useMemo",
+  "useRef",
+  "useContext",
+  "module",
+  "exports",
+  "require",
+  "import",
+  "export",
+  "from",
+  "as",
+  "any",
+  "string",
+  "number",
+  "boolean",
+  "void",
+  "null",
+  "undefined",
+  "never",
+  "unknown",
+]);
+
 const QUERIES: Record<string, string> = {
-  // Python 정의 패턴
+  // Python 정의
   python: `
         (function_definition name: (identifier) @def.func)
         (class_definition name: (identifier) @def.class)
         (parameter (identifier) @def.var)
         (assignment left: (identifier) @def.var)
     `,
-  // TypeScript/TSX 정의 패턴
+  // TypeScript/TSX
   typescript: `
-        ; 1. 함수 및 클래스 선언
+        ; 1. 함수/메서드
         (function_declaration name: (identifier) @def.func)
-        (class_declaration name: (type_identifier) @def.class)
         (method_definition name: (property_identifier) @def.func)
         
-        ; 2. 타입 및 인터페이스
+        ; 2. 클래스/인터페이스 (타입 정보)
+        (class_declaration name: (type_identifier) @def.class)
         (interface_declaration name: (type_identifier) @def.type)
         (type_alias_declaration name: (type_identifier) @def.type)
         (enum_declaration name: (identifier) @def.type)
         
-        ; 3. 변수 선언 (Destructuring 제외)
+        ; 3. 변수 (속성명은 문맥 유지를 위해 제외하거나 신중히 처리)
         (variable_declarator name: (identifier) @def.var)
         
-        ; 4. 함수 파라미터
+        ; 4. 파라미터
         (required_parameter (identifier) @def.var)
         (optional_parameter (identifier) @def.var)
     `,
@@ -40,27 +82,19 @@ QUERIES["javascriptreact"] = QUERIES["typescript"];
 
 export class AutoCodeSanitizer {
   private parser: any = null;
-  private extensionPath: string; // Base Path
+  private extensionPath: string;
 
   // 변환 테이블
   private mapForward = new Map<string, string>();
   private mapBackward = new Map<string, string>();
-  private typeCounters = { var: 0, func: 0, class: 0, type: 0 };
+  private typeCounters: Record<string, number> = {};
 
-  /**
-   * Helper: 언어 ID에 따른 WASM 파일명 반환
-   */
   private _getWasmFile(languageId: string): string {
-    if (languageId === "python") {
-      return "tree-sitter-python.wasm";
-    }
-    if (languageId === "typescriptreact" || languageId === "javascriptreact") {
-      return "tree-sitter-tsx.wasm";
-    }
-    if (languageId === "typescript" || languageId === "javascript") {
+    if (languageId === "python") return "tree-sitter-python.wasm";
+    if (languageId.includes("react")) return "tree-sitter-tsx.wasm";
+    if (languageId.includes("typescript") || languageId.includes("javascript"))
       return "tree-sitter-typescript.wasm";
-    }
-    return ""; // Not supported
+    return "";
   }
 
   constructor(extensionPath: string) {
@@ -81,124 +115,138 @@ export class AutoCodeSanitizer {
   }
 
   /**
-   * 이름 마스킹 생성 로직
+   * [전략 2 & 3] 시맨틱(의미론적) 마스킹 생성
+   * AI가 변수 타입과 역할을 유추할 수 있도록 힌트를 주는 접두어 사용
    */
   private getReplacement(originalName: string, typeTag: string): string {
     if (this.mapForward.has(originalName))
       return this.mapForward.get(originalName)!;
 
+    // 1. 기본 카테고리
     let prefix = "VAR";
-
-    // 1. 카테고리별 기본 접두사
     if (typeTag.includes("func")) prefix = "ACTION";
-    else if (typeTag.includes("class")) prefix = "ENTITY";
+    else if (typeTag.includes("class")) prefix = "CLASS";
     else if (typeTag.includes("type")) prefix = "TYPE";
 
-    // 2. 이름 기반 지능형 접두사
-    if (originalName.endsWith("Props")) prefix = "PROPS_DEF";
-    else if (originalName === "props") prefix = "PROPS";
-    else if (originalName.startsWith("use") && originalName.length > 3)
-      prefix = "HOOK";
-    else if (originalName.match(/^(is|has|can|should|did)[A-Z]/))
+    // 2. [개선] 헝가리안 표기법 스타일의 힌트 추가 (AI 이해도 향상)
+    // 리스트/배열
+    if (
+      originalName.match(/(List|Array|Items|Collection|s)$/) &&
+      !originalName.endsWith("ss")
+    ) {
+      prefix = "LIST_" + prefix;
+    }
+    // 불리언 (Is, Has, Can)
+    else if (originalName.match(/^(is|has|can|should|did|will)[A-Z]/)) {
       prefix = "BOOL";
-    else if (originalName.match(/(List|Array|Items|Collection)$/))
-      prefix = "LIST";
-    else if (originalName.match(/(Id|Key|Index|Code)$/)) prefix = "ID";
-    else if (originalName.match(/^(on|handle)[A-Z]/)) prefix = "HANDLER";
+    }
+    // 문자열 관련 (Name, Title, Text, Str)
+    else if (
+      originalName.match(/(Name|Title|Text|String|Str|Label|Message|Msg)$/)
+    ) {
+      prefix = "STR";
+    }
+    // 숫자 관련 (Count, Idx, Num, Size, Length)
+    else if (
+      originalName.match(
+        /(Count|Index|Idx|Num|Size|Length|Amount|Price|Total)$/,
+      )
+    ) {
+      prefix = "NUM";
+    }
+    // ID/Key
+    else if (originalName.match(/(Id|Key|Code|Uuid)$/)) {
+      prefix = "ID";
+    }
+    // 핸들러
+    else if (originalName.match(/^(on|handle)[A-Z]/)) {
+      prefix = "HANDLER";
+    }
+    // React Hooks
+    else if (originalName.startsWith("use") && originalName.length > 3) {
+      prefix = "HOOK";
+    }
+    // Props
+    else if (originalName.endsWith("Props") || originalName === "props") {
+      prefix = "PROPS";
+    }
 
     const key = prefix.toLowerCase();
+    if (!this.typeCounters[key]) this.typeCounters[key] = 0;
+    this.typeCounters[key]++;
 
-    if (typeof (this.typeCounters as any)[key] !== "number") {
-      (this.typeCounters as any)[key] = 0;
-    }
-    (this.typeCounters as any)[key]++;
-
-    const count = (this.typeCounters as any)[key];
-    const maskedName = `${prefix}_${count}`;
+    // 예: STR_1, BOOL_5, ACTION_user_3 (가능하다면)
+    // 여기서는 단순하게 접두어_숫자로 처리
+    const maskedName = `${prefix}_${this.typeCounters[key]}`;
 
     this.mapForward.set(originalName, maskedName);
     this.mapBackward.set(maskedName, originalName);
     return maskedName;
   }
 
-  /**
-   * Main: Sanitize / Obfuscate Code
-   */
   public async sanitize(
-    code: string, // Source Code
-    langId: string, // Language ID
+    code: string,
+    langId: string,
     options: { maskVars: boolean; maskFuncs: boolean; maskClasses: boolean },
   ): Promise<{ sanitized: string; mapping: any }> {
     if (!this.parser) await this.init();
 
+    // 초기화
+    this.mapForward.clear();
+    this.mapBackward.clear();
+    this.typeCounters = {};
+
     const wasmFile = this._getWasmFile(langId);
-    if (!wasmFile) {
-      vscode.window.showWarningMessage(`지원하지 않는 언어: ${langId}`);
-      return { sanitized: code, mapping: {} };
-    }
+    if (!wasmFile) return { sanitized: code, mapping: {} };
 
     const wasmPath = path.join(this.extensionPath, "parsers", wasmFile);
-    let languageObj;
-
-    try {
-      languageObj = await Language.load(wasmPath);
-      this.parser.setLanguage(languageObj);
-    } catch (e) {
-      console.error(e);
-      vscode.window.showErrorMessage(
-        `Parser load failed: ${wasmFile} (Ensure parsers folder exists)`,
-      );
-      return { sanitized: code, mapping: {} };
-    }
-
-    // 쿼리 키 설정 (React는 TypeScript 쿼리 사용)
-    let queryKey = langId;
-    if (
-      langId === "typescriptreact" ||
-      langId === "javascriptreact" ||
-      langId === "javascript"
-    ) {
-      queryKey = "typescript";
-    }
-
-    const defQueryStr = QUERIES[queryKey];
-    if (!defQueryStr) return { sanitized: code, mapping: {} };
 
     let tree: any = null;
     let defQuery: any = null;
     let replaceQuery: any = null;
 
     try {
+      const languageObj = await Language.load(wasmPath);
+      this.parser.setLanguage(languageObj);
       tree = this.parser.parse(code);
-      defQuery = new Query(this.parser.language, defQueryStr);
 
-      const matches = defQuery.matches(tree.rootNode);
+      // 1. 정의(Definition) 수집
+      let queryKey = langId;
+      if (langId.includes("react") || langId === "javascript")
+        queryKey = "typescript";
 
-      // 1. [Pass 1] 정의(Definition) 수집 및 매핑 생성
-      for (const match of matches) {
-        for (const capture of match.captures) {
-          // VAR_24 assumed to be 'captures'
-          const nodeText = capture.node.text; // VAR_23=node, VAR_19=text
-          const tag = capture.name;
+      const defQueryStr = QUERIES[queryKey];
+      if (defQueryStr) {
+        defQuery = new Query(this.parser.language, defQueryStr);
+        const matches = defQuery.matches(tree.rootNode);
 
-          if (tag.includes("var") && !options.maskVars) continue;
-          if (tag.includes("func") && !options.maskFuncs) continue;
-          if (
-            (tag.includes("class") || tag.includes("type")) &&
-            !options.maskClasses
-          )
-            continue;
+        for (const match of matches) {
+          for (const capture of match.captures) {
+            const nodeText = capture.node.text;
+            const tag = capture.name;
 
-          if (nodeText.length < 2) continue;
-          if (nodeText.startsWith("_")) continue;
+            // 옵션 및 예외 처리 검사
+            if (tag.includes("var") && !options.maskVars) continue;
+            if (tag.includes("func") && !options.maskFuncs) continue;
+            if (
+              (tag.includes("class") || tag.includes("type")) &&
+              !options.maskClasses
+            )
+              continue;
 
-          if (!this.mapForward.has(nodeText)) {
-            this.getReplacement(nodeText, tag);
+            // [안전장치] 너무 짧거나, 이미 예약된어이거나, 표준 라이브러리인 경우 건너뜀
+            if (nodeText.length < 2) continue;
+            if (nodeText.startsWith("_")) continue;
+            if (RESERVED_NAMES.has(nodeText)) continue;
+
+            if (!this.mapForward.has(nodeText)) {
+              this.getReplacement(nodeText, tag);
+            }
           }
         }
       }
 
-      // 2. [Pass 2] 전체 치환 (Global Replacement)
+      // 2. 전체 코드 치환 (Text Replacement using Tree-sitter ranges)
       replaceQuery = new Query(
         this.parser.language,
         `
@@ -206,12 +254,11 @@ export class AutoCodeSanitizer {
           (type_identifier) @ident
           (property_identifier) @ident
           (shorthand_property_identifier_pattern) @ident
-          (statement_identifier) @ident
         `,
       );
 
       const captures = replaceQuery.captures(tree.rootNode);
-      // Reverse sort to replace safely without index shifting
+      // 인덱스가 꼬이지 않도록 뒤에서부터 교체
       captures.sort((a: any, b: any) => b.node.startIndex - a.node.startIndex);
 
       let resultText = code;
@@ -220,6 +267,7 @@ export class AutoCodeSanitizer {
         const node = capture.node;
         const text = node.text;
 
+        // mapForward에 존재하는 것만 교체 (정의 단계에서 필터링된 것은 여기서도 무시됨)
         if (this.mapForward.has(text)) {
           const masked = this.mapForward.get(text)!;
           resultText =
@@ -237,7 +285,6 @@ export class AutoCodeSanitizer {
       console.error("Sanitization error", e);
       return { sanitized: code, mapping: {} };
     } finally {
-      // [Memory Cleanup] 중요: WASM 객체 해제
       if (tree) tree.delete();
       if (defQuery) defQuery.delete();
       if (replaceQuery) replaceQuery.delete();
@@ -245,7 +292,8 @@ export class AutoCodeSanitizer {
   }
 
   /**
-   * Core logic for restoring obfuscated code
+   * 내부 복호화 로직 (State-Safe)
+   * AI가 생성한 신규 변수(매핑에 없는 키)는 건드리지 않고 그대로 둡니다.
    */
   private async _applyRestoration(
     code: string,
@@ -263,6 +311,7 @@ export class AutoCodeSanitizer {
       await this.parser.setLanguage(await Language.load(wasmPath));
       tree = this.parser.parse(code);
 
+      // 식별자만 찾아서 복구 시도
       query = new Query(
         this.parser.language,
         `
@@ -280,8 +329,9 @@ export class AutoCodeSanitizer {
 
       for (const capture of captures) {
         const node = capture.node;
-        const text = node.text; // node.text
+        const text = node.text;
 
+        // [핵심] 매핑 테이블에 있는 "암호화된 이름"만 원복
         if (mapTable.has(text)) {
           const original = mapTable.get(text)!;
           restoredCode =
@@ -289,6 +339,7 @@ export class AutoCodeSanitizer {
             original +
             restoredCode.substring(node.endIndex);
         }
+        // 매핑에 없는(AI가 새로 만든) 변수는 변경 없음 -> 안전함
       }
 
       return restoredCode;
@@ -300,71 +351,44 @@ export class AutoCodeSanitizer {
     }
   }
 
-  public async restore(code: string, langId: string): Promise<string> {
-    if (!this.parser) await this.init();
-    // Uses internal memory map
-    return this._applyRestoration(code, langId, this.mapBackward);
-  }
-
-  public async restoreFromOutput(fullText: string): Promise<string> {
-    if (!this.parser) await this.init();
-
-    // 1. Extract JSON Map
-    const jsonMatch = fullText.match(/map table\s*```json\s*([\s\S]*?)\s*```/i);
-    let extractedMap: Record<string, string> = {};
-
-    if (jsonMatch && jsonMatch[1]) {
-      try {
-        extractedMap = JSON.parse(jsonMatch[1]);
-      } catch (e) {
-        throw new Error("Invalid Map Table JSON.");
-      }
-    } else {
-      console.warn("No Map Table found. Using memory cache.");
-    }
-
-    // 2. Extract Code
-    const codeMatch = fullText.match(/code\s*```[\w+]*\s*([\s\S]*?)\s*```/i);
-    let targetCode = codeMatch && codeMatch[1] ? codeMatch[1] : fullText;
-
-    // 3. Update Map
-    if (Object.keys(extractedMap).length > 0) {
-      this.mapBackward.clear();
-      for (const [masked, original] of Object.entries(extractedMap)) {
-        this.mapBackward.set(masked, original);
-      }
-    }
-
-    if (this.mapBackward.size === 0) {
-      throw new Error("No mapping info available for restoration.");
-    }
-
-    // Default to typescript for blind restoration
-    return this._applyRestoration(targetCode, "typescript", this.mapBackward);
-  }
-
+  /**
+   * [개선] 복호화 진입점
+   * JSON 문자열 또는 객체/Map을 모두 지원하도록 오버로딩
+   */
   public async restoreWithMap(
-    code: string, // Obfuscated Code
-    mappingJson: string, // JSON Map String
-    langId: string, // Language ID
+    code: string,
+    mapping: string | Record<string, string> | Map<string, string>,
+    langId: string,
   ): Promise<string> {
     if (!this.parser) await this.init();
 
-    let parsedMap: Record<string, string>;
-    try {
-      parsedMap = JSON.parse(mappingJson);
-    } catch (e) {
-      throw new Error("Invalid JSON format for Map Table.");
+    let restorationMap = new Map<string, string>();
+
+    // 입력 타입에 따른 Map 변환
+    if (typeof mapping === "string") {
+      try {
+        const parsed = JSON.parse(mapping);
+        for (const [k, v] of Object.entries(parsed))
+          restorationMap.set(k, v as string);
+      } catch {
+        throw new Error("Invalid JSON format for Map Table.");
+      }
+    } else if (mapping instanceof Map) {
+      restorationMap = mapping;
+    } else {
+      // Object
+      for (const [k, v] of Object.entries(mapping))
+        restorationMap.set(k, v as string);
     }
 
-    const restorationMap = new Map<string, string>();
-    for (const [masked, original] of Object.entries(parsedMap)) {
-      restorationMap.set(masked, original);
-    }
-
-    // Sync internal map as well
+    // 내부 상태 동기화 (선택 사항이나 디버깅 위해)
     this.mapBackward = restorationMap;
 
     return this._applyRestoration(code, langId, restorationMap);
+  }
+
+  // Legacy method support
+  public async restore(code: string, langId: string): Promise<string> {
+    return this.restoreWithMap(code, this.mapBackward, langId);
   }
 }
