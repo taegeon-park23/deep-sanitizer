@@ -326,10 +326,34 @@ export class AutoCodeSanitizer {
         const name = capture.name;
 
         if (name === "cmt") {
-          // 주석 제거
+          const prefix = "CMT";
+          if (!this.typeCounters[prefix]) this.typeCounters[prefix] = 0;
+          this.typeCounters[prefix]++;
+          const tag = `[[${prefix}_${this.typeCounters[prefix]}]]`;
+
+          let replacement = "";
+          // 주석 스타일 판별 및 내용 추출
+          if (text.startsWith("//")) {
+            // Line comment: // 내용
+            this.mapBackward.set(tag, text.substring(2));
+            replacement = "//" + tag;
+          } else if (text.startsWith("/**")) {
+            // Doc block: /** 내용 */
+            this.mapBackward.set(tag, text.substring(3, text.length - 2));
+            replacement = "/**" + tag + "*/";
+          } else if (text.startsWith("/*")) {
+            // Standard block: /* 내용 */
+            this.mapBackward.set(tag, text.substring(2, text.length - 2));
+            replacement = "/*" + tag + "*/";
+          } else {
+            // Fallback
+            this.mapBackward.set(tag, text);
+            replacement = tag;
+          }
+
           resultText =
             resultText.substring(0, node.startIndex) +
-            "/* COMMENT REMOVED */" +
+            replacement +
             resultText.substring(node.endIndex);
         } else if (name === "str") {
           // [중요] 문자열 마스킹: [[STR_1]] 패턴 적용
@@ -459,7 +483,17 @@ export class AutoCodeSanitizer {
       return match;
     });
 
-    // 2. 식별자(변수명 등) 복구
+    // 2. 주석 패턴 복구 ([[CMT_N]])
+    // 마스킹 시 기호(//, /* */)를 남겨두었으므로, 태그 자체만 원본 내용으로 치환하여 스타일을 유지합니다.
+    const commentPattern = /\[\[CMT_\d+\]\]/g;
+    restoredCode = restoredCode.replace(commentPattern, (match) => {
+      if (mapTable.has(match)) {
+        return mapTable.get(match)!;
+      }
+      return match;
+    });
+
+    // 3. 식별자(변수명 등) 복구
     // 식별자는 단어 경계(\b)를 사용하여 정확히 매칭
     // 문자열 복구 후 실행하여 충돌 방지
     mapTable.forEach((originalName, maskedName) => {
